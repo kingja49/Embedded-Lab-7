@@ -1,0 +1,166 @@
+#include <msp430g2553.h>
+
+volatile long temp, tempRaw, light, lightRaw, temp2, tempRaw2;
+char result[100];
+volatile long sample[100];
+void temperature();
+void photo();
+void reset();
+
+void uart_init(void);
+void ConfigClocks(void);
+void strreverse(char* begin, char* end);
+void itoa(int value, char* str, int base);
+void port_init();
+
+
+void main(void)
+{
+    WDTCTL = WDTPW + WDTHOLD;
+    port_init();
+
+    ConfigClocks();
+    uart_init();
+    _delay_cycles(5);
+
+    while(1){
+
+
+         reset();
+         temperature();
+         ADC10CTL0 |= ENC + ADC10SC +MSC;       // Converter Enable, Sampling/conversion start
+         while((ADC10CTL0 & ADC10IFG) == 0);    // check the Flag, while its low just wait
+         _delay_cycles(2000000);                // delay for about 1 second so LED doesn't flash too fast
+         tempRaw = ADC10MEM;                    // read the converted data into a variable
+         temp = (((tempRaw-260)*423)/1024);     //converts to degree celsius
+         ADC10CTL0 &= ~ADC10IFG;                // clear the flag
+         //itoa((temp),result,10);
+
+         reset();
+         photo();
+         ADC10CTL0 |= ENC + ADC10SC +MSC;       // Converter Enable, Sampling/conversion start
+         while((ADC10CTL0 & ADC10IFG) == 0);    // check the Flag, while its low just wait
+         _delay_cycles(20000000);                // delay for about 1 second so LED doesn't flash too fast
+         lightRaw = ADC10MEM;                   // read the converted data into a variable
+         light = (((lightRaw-673)*423)/1024);   //Converts the light value to a lower value that is more easily used in application
+         ADC10CTL0 &= ~ADC10IFG;                // clear the flag
+         itoa((light),result,10);
+
+         //reset();                             //This commented out code was used to test the connection with the ThingSpeak interface using the internal Temperature Sensor on the MSP430
+         //ConfigureAdc_temp();
+         //_delay_cycles(100);
+         //tempRaw2 = ADC10MEM;                    
+         //temp2 = (((tempRaw2-673)*423)/1024);
+
+         int acount =0;
+
+         while(result[acount]!='\0')
+             {
+                 while((IFG2 & UCA0TXIFG)==0);  //Wait Unitl the UART transmitter is ready
+                 UCA0TXBUF = result[acount++];  //Transmit the received data.
+             }
+
+        }
+    }
+
+
+// Configure Temperature for the external Thermistor using Port P1.4
+void temperature(){
+
+     ADC10CTL1 = INCH_4 + ADC10DIV_0 + CONSEQ_2;        //inch4 selects A4
+     ADC10CTL0 = SREF_1 | ADC10SHT_3 | REFON | ADC10ON; //Vref+, Vss, 64 ATD clocks per sample, internal references, turn ADCON
+     ADC10CTL0 |= ENC + ADC10SC +MSC;
+
+
+}
+//Configure the external photoresistor using port P1.6
+void photo(){
+
+     ADC10CTL1 = INCH_6 + ADC10DIV_0 + CONSEQ_2; //inch6 selects A6
+     ADC10CTL0 = SREF_1 | ADC10SHT_3 | REFON | ADC10ON;//Vref+, Vss, 64 ATD clocks per sample, internal references, turn ADCON
+     ADC10CTL0 |= ENC + ADC10SC +MSC;
+
+}
+//Configure the internal ADC temp, this was only used to test the ThingSpeak interface with the internal temp.
+//ConfigureAdc_temp(){
+
+    //ADC10CTL1 = INCH_10 + ADC10DIV_0 + CONSEQ_2; //inch4 selects A4
+    //ADC10CTL0 = SREF_1 | ADC10SHT_3 | REFON | ADC10ON;//Vref+, Vss, 64 ATD clocks per sample, internal references, turn ADCON
+    //ADC10CTL0 |= ENC + ADC10SC +MSC;
+//}
+//Reset the registers memory so that the next value from the sensors can be inputed
+void reset(){
+    ADC10CTL0 &= ~ADC10IFG;//CLEAR FLAG
+    ADC10MEM=0x00000000;
+    ADC10AE0=0x00;
+    ADC10CTL0=0x0000;
+    ADC10CTL1=0x0000;
+}
+
+
+//
+
+void uart_init(void){
+    UCA0CTL1 |= UCSWRST;                     //Disable the UART state machine
+    UCA0CTL1 |= UCSSEL_3;                    //Select SMCLK as the baud rate generator source
+    UCA0BR1 =0;
+    UCA0BR0 = 104;                           //Produce a 9,600 Baud UART rate
+    UCA0MCTL = 0x02;                         //Chooa propriately from Table 15-4 in User Guide
+    UCA0CTL1 &= ~UCSWRST;                    //Enable the UART state naching
+    IE2 |= UCA0RXIE;                         //Enable the UART receiver Interrupt
+}
+void ConfigClocks(void)
+ {
+
+  BCSCTL1 = CALBC1_1MHZ;                     // Set range
+  DCOCTL = CALDCO_1MHZ;                      // Set DCO step + modulation
+  BCSCTL3 |= LFXT1S_2;                       // LFXT1 = VLO
+  IFG1 &= ~OFIFG;                            // Clear OSCFault flag
+  BCSCTL2 = 0;                               // MCLK = DCO = SMCLK
+ }
+
+
+
+void strreverse(char* begin, char* end)      // Function to reverse the order of the ASCII char array elements
+{
+    char aux;
+    while(end>begin)
+        aux=*end, *end--=*begin, *begin++=aux;
+}
+
+void itoa(int value, char* str, int base) {  //Function to convert the signed int to an ASCII char array
+
+    static char num[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    char* wstr=str;
+    int sign;
+
+    // Validate that base is between 2 and 35 (inlcusive)
+    if (base<2 || base>35){
+        *wstr='\0';
+        return;
+    }
+
+    // Get magnitude and th value
+    sign=value;
+    if (sign < 0)
+        value = -value;
+
+    do // Perform interger-to-string conversion.
+        *wstr++ = num[value%base]; //create the next number in converse by taking the modolus
+    while(value/=base);  // stop when you get  a 0 for the quotient
+
+    if(sign<0) //attch sign character, if needed
+        *wstr++='-';
+    *wstr='\0'; //Attach a null character at end of char array. The string is in revers order at this point
+    strreverse(str,wstr-1); // Reverse string
+
+}
+
+
+
+
+void port_init(){
+    P1SEL |= BIT1 + BIT2;            // select non-GPIO  usage for Pins 1 and 2
+    P1SEL2 |= BIT1 + BIT2;           // Select UART usage of Pins 1 and 2
+}
+
